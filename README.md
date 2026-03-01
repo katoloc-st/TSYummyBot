@@ -5,14 +5,13 @@ Bot Telegram chuyên nghiệp cho đặt hàng trà sữa với đầy đủ tí
 ## 🤖 Live Demo (Dành cho ban giám khảo)
 
 **Bot Status**: 🟢 Running 24/7 on Render.com  
-**Bot Link**: `@your_bot_username` _(Update sau khi deploy)_
+**Bot Link**: `@TSYummyBot`
 
 **Quick Test:**
 1. Mở Telegram → Tìm bot
 2. Gửi `/start`
 3. Test flow: Chọn món → Customize → Đặt hàng
 
-📖 **[Xem hướng dẫn deploy chi tiết](DEPLOYMENT.md)**
 
 ## ✨ Tính năng
 
@@ -39,8 +38,8 @@ Bot Telegram chuyên nghiệp cho đặt hàng trà sữa với đầy đủ tí
 
 ### Bước 1: Clone repository
 ```bash
-git clone <repository-url>
-cd TELEBOT
+git clone https://github.com/katoloc-st/TSYummyBot
+cd TSYummyBot
 ```
 
 ### Bước 2: Cài đặt dependencies
