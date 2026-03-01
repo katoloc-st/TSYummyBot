@@ -795,7 +795,7 @@ async def pay_now(c: CallbackQuery, state: FSMContext):
     await c.message.edit_text(
         "💳 Bạn chọn *thanh toán trước*.\n"
         "➡️ Sau khi bấm *Xác nhận đặt hàng*, bot sẽ chuyển sang trang thanh toán (giả lập).\n\n"
-        "Nhập *ghi chú* (gõ `-` nếu không có):",
+        "Nhập *ghi chú* (gõ '-' nếu không có):",
         parse_mode=PM,
     )
     await state.set_state(OrderFSM.enter_note)
@@ -806,7 +806,7 @@ async def pay_now(c: CallbackQuery, state: FSMContext):
 async def pay_later(c: CallbackQuery, state: FSMContext):
     await state.update_data(payment_method="pay_later", payment_status="cod")
     await c.message.edit_text(
-        "💵 Bạn chọn *thanh toán sau* (thu tiền khi nhận).\n\nNhập *ghi chú* (gõ `-` nếu không có):",
+        "💵 Bạn chọn *thanh toán sau* (thu tiền khi nhận).\n\nNhập *ghi chú* (gõ '-' nếu không có):",
         parse_mode=PM,
     )
     await state.set_state(OrderFSM.enter_note)
