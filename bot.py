@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Tuple, Optional
 
 import aiosqlite
 from dotenv import load_dotenv
-from aiohttp import web
+from aiohttp import web, ClientSession, ClientTimeout
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart, Command
@@ -1174,30 +1174,52 @@ async def health_check(request):
 
 
 async def run_bot():
-    """Run the Telegram bot polling with auto-restart on failure."""
+    """Run the Telegram bot polling."""
+    if not BOT_TOKEN:
+        logger.critical("BOT_TOKEN not found in environment variables")
+        raise RuntimeError("BOT_TOKEN not found in .env")
+
+    await init_db()
+
+    bot = Bot(BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    dp.errors.register(error_handler)
+
+    logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
+    logger.info("Bot is now polling for updates...")
+    
+    await dp.start_polling(bot)
+
+
+async def keep_alive():
+    """Ping own service every 14 minutes to prevent Render free tier spin down."""
+    await asyncio.sleep(60)  # Wait 1 minute after startup
+    
+    # Render sets RENDER_EXTERNAL_URL automatically
+    service_url = os.getenv('RENDER_EXTERNAL_URL')
+    
+    if not service_url:
+        logger.warning("RENDER_EXTERNAL_URL not set, keep-alive disabled (OK for local dev)")
+        return
+    
+    logger.info(f"Keep-alive task started, will ping {service_url}/health every 14 minutes")
+    
+    timeout = ClientTimeout(total=10)
+    
     while True:
         try:
-            if not BOT_TOKEN:
-                logger.critical("BOT_TOKEN not found in environment variables")
-                raise RuntimeError("BOT_TOKEN not found in .env")
-
-            await init_db()
-
-            bot = Bot(BOT_TOKEN)
-            dp = Dispatcher(storage=MemoryStorage())
-            dp.include_router(router)
-            dp.errors.register(error_handler)
-
-            logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
-            logger.info("Bot is now polling for updates...")
-            
-            await dp.start_polling(bot)
+            async with ClientSession(timeout=timeout) as session:
+                async with session.get(f"{service_url}/health") as resp:
+                    if resp.status == 200:
+                        logger.info("✅ Keep-alive ping successful")
+                    else:
+                        logger.warning(f"⚠️ Keep-alive ping returned {resp.status}")
         except Exception as e:
-            logger.error(f"Bot polling crashed: {e}. Restarting in 5s...", exc_info=True)
-            await asyncio.sleep(5)
-        except asyncio.CancelledError:
-            logger.info("Bot polling cancelled")
-            break
+            logger.error(f"❌ Keep-alive ping failed: {e}")
+        
+        # Wait 14 minutes before next ping (Render timeout is 15 min)
+        await asyncio.sleep(14 * 60)
 
 
 async def run_web_server():
@@ -1226,7 +1248,7 @@ async def run_web_server():
 async def main():
     """Main function to start both bot and web server."""
     logger.info("="*50)
-    logger.info("Starting Telegram Bot + Web Server...")
+    logger.info("Starting Telegram Bot + Web Server + Keep-Alive...")
     
     # Start web server FIRST (critical for Render health check)
     web_task = asyncio.create_task(run_web_server())
@@ -1234,17 +1256,21 @@ async def main():
     # Wait to ensure web server is ready
     await asyncio.sleep(2)
     
-    # Then start bot polling (will auto-restart on failure)
+    # Start keep-alive ping task (prevents Render spin down)
+    keepalive_task = asyncio.create_task(keep_alive())
+    
+    # Then start bot polling
     bot_task = asyncio.create_task(run_bot())
     
-    # Keep both running (return_exceptions prevents one failure from killing the other)
+    # Keep all running
     try:
-        await asyncio.gather(web_task, bot_task, return_exceptions=True)
+        await asyncio.gather(web_task, keepalive_task, bot_task, return_exceptions=True)
     except asyncio.CancelledError:
         logger.info("Main tasks cancelled, cleaning up...")
         web_task.cancel()
+        keepalive_task.cancel()
         bot_task.cancel()
-        await asyncio.gather(web_task, bot_task, return_exceptions=True)
+        await asyncio.gather(web_task, keepalive_task, bot_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
