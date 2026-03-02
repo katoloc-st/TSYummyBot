@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Tuple, Optional
 
 import aiosqlite
 from dotenv import load_dotenv
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import CommandStart, Command
@@ -1138,6 +1139,9 @@ async def mom_set_status(c: CallbackQuery, bot: Bot):
         await c.answer("Trạng thái không hợp lệ.", show_alert=True)
         return
 
+    # Answer callback immediately to avoid timeout
+    await c.answer("Đang cập nhật...")
+
     logger.info(f"Admin {c.from_user.id} changed order {order_code} status to {status}")
     await set_order_status(order_code, status)
 
@@ -1155,49 +1159,77 @@ async def mom_set_status(c: CallbackQuery, bot: Bot):
         except Exception as e:
             logger.error(f"Failed to send status notification to customer: {e}")
 
-    await c.answer("Đã cập nhật")
-
 
 async def error_handler(event: ErrorEvent):
     """Global error handler for bot."""
     logger.error(f"Update {event.update} caused error: {event.exception}", exc_info=event.exception)
 
 
-async def main():
-    """Main function to start the bot."""
-    logger.info("="*50)
-    logger.info("Starting Telegram Bot...")
-    
+async def health_check(request):
+    """Health check endpoint for Render."""
+    return web.Response(text="Bot is running!")
+
+
+async def run_bot():
+    """Run the Telegram bot polling."""
     if not BOT_TOKEN:
         logger.critical("BOT_TOKEN not found in environment variables")
         raise RuntimeError("BOT_TOKEN not found in .env")
 
+    await init_db()
+
+    bot = Bot(BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    dp.errors.register(error_handler)
+
+    logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
+    logger.info("Bot is now polling for updates...")
+    
+    await dp.start_polling(bot)
+
+
+async def run_web_server():
+    """Run HTTP server for Render health checks."""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    port = int(os.getenv('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"HTTP server started on port {port}")
+    
+    # Keep the server running
+    while True:
+        await asyncio.sleep(3600)
+
+
+async def main():
+    """Main function to start both bot and web server."""
+    logger.info("="*50)
+    logger.info("Starting Telegram Bot + Web Server...")
+    
     try:
-        await init_db()
-
-        bot = Bot(BOT_TOKEN)
-        dp = Dispatcher(storage=MemoryStorage())
-        dp.include_router(router)
-        
-        # Register error handler
-        dp.errors.register(error_handler)
-
-        logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
-        logger.info("Bot is now polling for updates...")
-        print("Bot running (polling)... Press Ctrl+C to stop.")
-        
-        await dp.start_polling(bot)
+        # Run bot polling and web server concurrently
+        await asyncio.gather(
+            run_bot(),
+            run_web_server()
+        )
     except Exception as e:
-        logger.critical(f"Failed to start bot: {e}", exc_info=True)
+        logger.critical(f"Failed to start: {e}", exc_info=True)
         raise
 
 
 if __name__ == "__main__":
     try:
+        print("✅ Bot + Web Server starting... Press Ctrl+C to stop.")
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot stopped by user (Ctrl+C)")
-        print("\n Bot stopped gracefully.")
+        print("\n⛔ Bot stopped gracefully.")
     except Exception as e:
         logger.critical(f"Bot crashed: {e}", exc_info=True)
         sys.exit(1)
