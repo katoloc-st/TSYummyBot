@@ -5,6 +5,8 @@ import os
 import re
 import html
 import sys
+import signal
+import platform
 from datetime import datetime
 from typing import Dict, List, Any, Tuple, Optional
 
@@ -140,7 +142,7 @@ for tid in TOPPING_ITEM_IDS:
         "price": int(it.get("price_m", 0)),  # topping price from price_m
     }
 
-# ✅ MAIN categories exclude topping categories (Topping không hiện ở màn danh mục)
+# MAIN categories exclude topping categories 
 CATEGORIES = {cat: ids for cat, ids in CATEGORIES_RAW.items() if cat not in TOPPING_CATS}
 
 
@@ -1167,26 +1169,35 @@ async def error_handler(event: ErrorEvent):
 
 async def health_check(request):
     """Health check endpoint for Render."""
-    return web.Response(text="Bot is running!")
+    logger.debug(f"Health check from {request.remote}")
+    return web.Response(text="Bot is running!", status=200, headers={'Content-Type': 'text/plain'})
 
 
 async def run_bot():
-    """Run the Telegram bot polling."""
-    if not BOT_TOKEN:
-        logger.critical("BOT_TOKEN not found in environment variables")
-        raise RuntimeError("BOT_TOKEN not found in .env")
+    """Run the Telegram bot polling with auto-restart on failure."""
+    while True:
+        try:
+            if not BOT_TOKEN:
+                logger.critical("BOT_TOKEN not found in environment variables")
+                raise RuntimeError("BOT_TOKEN not found in .env")
 
-    await init_db()
+            await init_db()
 
-    bot = Bot(BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(router)
-    dp.errors.register(error_handler)
+            bot = Bot(BOT_TOKEN)
+            dp = Dispatcher(storage=MemoryStorage())
+            dp.include_router(router)
+            dp.errors.register(error_handler)
 
-    logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
-    logger.info("Bot is now polling for updates...")
-    
-    await dp.start_polling(bot)
+            logger.info(f"Bot started successfully. Admin IDs: {ADMIN_IDS if ADMIN_IDS else 'None'}")
+            logger.info("Bot is now polling for updates...")
+            
+            await dp.start_polling(bot)
+        except Exception as e:
+            logger.error(f"Bot polling crashed: {e}. Restarting in 5s...", exc_info=True)
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            logger.info("Bot polling cancelled")
+            break
 
 
 async def run_web_server():
@@ -1200,11 +1211,16 @@ async def run_web_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logger.info(f"HTTP server started on port {port}")
+    logger.info(f"✅ HTTP server started on 0.0.0.0:{port}")
+    print(f"✅ HTTP server listening on port {port}")
     
-    # Keep the server running
-    while True:
-        await asyncio.sleep(3600)
+    # Keep the server running forever
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        logger.info("Web server stopping...")
+        await runner.cleanup()
 
 
 async def main():
@@ -1212,24 +1228,67 @@ async def main():
     logger.info("="*50)
     logger.info("Starting Telegram Bot + Web Server...")
     
+    # Start web server FIRST (critical for Render health check)
+    web_task = asyncio.create_task(run_web_server())
+    
+    # Wait to ensure web server is ready
+    await asyncio.sleep(2)
+    
+    # Then start bot polling (will auto-restart on failure)
+    bot_task = asyncio.create_task(run_bot())
+    
+    # Keep both running (return_exceptions prevents one failure from killing the other)
     try:
-        # Run bot polling and web server concurrently
-        await asyncio.gather(
-            run_bot(),
-            run_web_server()
-        )
-    except Exception as e:
-        logger.critical(f"Failed to start: {e}", exc_info=True)
-        raise
+        await asyncio.gather(web_task, bot_task, return_exceptions=True)
+    except asyncio.CancelledError:
+        logger.info("Main tasks cancelled, cleaning up...")
+        web_task.cancel()
+        bot_task.cancel()
+        await asyncio.gather(web_task, bot_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
-    try:
-        print("✅ Bot + Web Server starting... Press Ctrl+C to stop.")
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user (Ctrl+C)")
-        print("\n⛔ Bot stopped gracefully.")
-    except Exception as e:
-        logger.critical(f"Bot crashed: {e}", exc_info=True)
-        sys.exit(1)
+    print("✅ Bot + Web Server starting... Press Ctrl+C to stop.")
+    
+    # Platform-specific signal handling
+    if platform.system() == 'Windows':
+        # Windows: Use standard signal handling
+        def signal_handler(signum, frame):
+            logger.info(f"Received signal {signum}, shutting down...")
+            sys.exit(0)
+        
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        try:
+            asyncio.run(main())
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot stopped gracefully")
+            print("\n⛔ Bot stopped gracefully.")
+        except Exception as e:
+            logger.critical(f"Bot crashed: {e}", exc_info=True)
+            sys.exit(1)
+    else:
+        # Unix/Linux (Render): Use asyncio signal handlers
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        def signal_handler(signum):
+            logger.info(f"Received signal {signum}, shutting down gracefully...")
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
+            loop.stop()
+        
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda s=sig: signal_handler(s))
+        
+        try:
+            loop.run_until_complete(main())
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("Bot stopped gracefully")
+            print("\n⛔ Bot stopped gracefully.")
+        except Exception as e:
+            logger.critical(f"Bot crashed: {e}", exc_info=True)
+            sys.exit(1)
+        finally:
+            loop.close()

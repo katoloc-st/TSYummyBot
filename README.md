@@ -2,7 +2,7 @@
 
 Bot Telegram chuyên nghiệp cho đặt hàng trà sữa với đầy đủ tính năng quản lý đơn hàng, thanh toán, và thông báo real-time.
 
-## 🤖 Live Demo (Dành cho ban giám khảo)
+## 🤖 Live Demo
 
 **Bot Status**: 🟢 Running 24/7 on Render.com  
 **Bot Link**: `@TSYummyBot`
@@ -208,10 +208,6 @@ Format log:
 2. Đảm bảo `available=true`
 3. Xem log khi bot khởi động
 
-## 📞 Liên hệ & Hỗ trợ
-
-- **GitHub Issues**: [Link to issues]
-- **Telegram**: @your_telegram_username
 
 ## 📄 License
 
